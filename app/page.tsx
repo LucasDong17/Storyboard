@@ -61,7 +61,7 @@ export default function Home() {
     ctx.fillStyle='#bbb5a9';ctx.beginPath();ctx.moveTo(0,h*.84);ctx.lineTo(w,h*.8);ctx.lineTo(w,h);ctx.lineTo(0,h);ctx.closePath();ctx.fill();ctx.stroke();
     boxes.forEach(b=>{ctx.strokeStyle=b.color;ctx.lineWidth=5;ctx.strokeRect(b.x,b.y,b.w,b.h)});
     notes.forEach(n=>{ctx.fillStyle=n.color;ctx.font='900 22px Comic Sans MS';ctx.textAlign='left';ctx.fillText(n.text,n.x,n.y)});
-    [...strokes, ...(activeStroke.current?[activeStroke.current]:[])].forEach(s=>{if(s.points.length<2)return;ctx.save();ctx.globalCompositeOperation=s.erase?'destination-out':'source-over';ctx.strokeStyle=s.color;ctx.lineWidth=s.width;ctx.lineCap='round';ctx.lineJoin='round';ctx.beginPath();ctx.moveTo(s.points[0].x,s.points[0].y);s.points.slice(1).forEach(pt=>ctx.lineTo(pt.x,pt.y));ctx.stroke();ctx.restore()});
+    [...strokes, activeStroke.current].filter((s):s is Stroke=>Boolean(s)).forEach(s=>{if(s.points.length<2)return;ctx.save();ctx.globalCompositeOperation=s.erase?'destination-out':'source-over';ctx.strokeStyle=s.color;ctx.lineWidth=s.width;ctx.lineCap='round';ctx.lineJoin='round';ctx.beginPath();ctx.moveTo(s.points[0].x,s.points[0].y);s.points.slice(1).forEach(pt=>ctx.lineTo(pt.x,pt.y));ctx.stroke();ctx.restore()});
     puppets.forEach((p,i)=>drawPuppet(ctx,p,i));
     if(isRecording){ctx.fillStyle='#ee513d';ctx.beginPath();ctx.arc(24,26,9,0,7);ctx.fill();ctx.strokeStyle='#171718';ctx.lineWidth=2;ctx.stroke();ctx.fillStyle='#171718';ctx.font='900 12px Arial';ctx.textAlign='left';ctx.fillText(`REC  ${formatTime(recordTime)}`,42,30)}
   },[boxes,notes,strokes,puppets,isRecording,recordTime,drawPuppet]);
