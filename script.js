@@ -3,9 +3,35 @@
 
   const inkColors = ['#171718', '#ee513d', '#5c8ee6', '#ffd43b'];
   const puppetColors = ['#ee513d', '#5c8ee6', '#ffd43b', '#66c79a'];
+  const sceneTemplates = [
+    { id: 'mart', name: 'The Great Snack Heist', icon: '🏪', color: '#f29d77', elements: [
+      { id: 'sun', kind: 'circle', x: .90, y: .12, w: .09, h: .12, color: '#ffd43b' },
+      { id: 'mart', kind: 'rect', x: .25, y: .39, w: .46, h: .43, color: '#f29d77' },
+      { id: 'sign', kind: 'textBox', x: .34, y: .45, w: .28, h: .09, color: '#ffd43b', text: 'MART' },
+      { id: 'door', kind: 'rect', x: .31, y: .64, w: .10, h: .18, color: '#78a9df' },
+      { id: 'window', kind: 'rect', x: .54, y: .66, w: .13, h: .10, color: '#bde9f4' },
+      { id: 'road', kind: 'ground', x: 0, y: .82, w: 1, h: .18, color: '#bbb5a9' }
+    ]},
+    { id: 'space', name: 'Trouble in Space', icon: '🚀', color: '#252650', elements: [
+      { id: 'sky', kind: 'rect', x: 0, y: 0, w: 1, h: 1, color: '#252650', noStroke: true },
+      { id: 'moon', kind: 'circle', x: .78, y: .23, w: .20, h: .27, color: '#ddd9c9' },
+      { id: 'rocket', kind: 'textBox', x: .20, y: .42, w: .24, h: .16, color: '#ee513d', text: 'ROCKET' },
+      { id: 'planet', kind: 'circle', x: .50, y: .70, w: .24, h: .30, color: '#5c8ee6' }
+    ]},
+    { id: 'forest', name: 'The Very Weird Woods', icon: '🌲', color: '#66c79a', elements: [
+      { id: 'sky', kind: 'rect', x: 0, y: 0, w: 1, h: 1, color: '#d9eff2', noStroke: true },
+      { id: 'sun', kind: 'circle', x: .82, y: .14, w: .12, h: .16, color: '#ffd43b' },
+      { id: 'tree1', kind: 'textBox', x: .10, y: .30, w: .18, h: .48, color: '#66c79a', text: 'TREE' },
+      { id: 'tree2', kind: 'textBox', x: .65, y: .24, w: .21, h: .54, color: '#438a68', text: 'TREE' },
+      { id: 'grass', kind: 'ground', x: 0, y: .76, w: 1, h: .24, color: '#8fbd64' }
+    ]}
+  ];
+  const clone = value => JSON.parse(JSON.stringify(value));
+  const defaultScene = () => ({ templateId: 'mart', title: 'The Great Snack Heist', elements: clone(sceneTemplates[0].elements) });
   const state = {
     tab: 'stage', tool: 'pencil', ink: inkColors[0], strokes: [], boxes: [], notes: [], puppets: [],
-    isRecording: false, recordTime: 0, takes: [], timeline: [], selectedTake: null
+    isRecording: false, recordTime: 0, takes: [], timeline: [], selectedTake: null,
+    stageMode: 'live', selectedElement: null, scene: defaultScene()
   };
 
   const canvas = document.querySelector('#stageCanvas');
@@ -17,11 +43,44 @@
   let mediaChunks = [];
   let recordTimer = null;
   let draggedClip = null;
+  let draggingElement = null;
+  let elementDragOffset = null;
   let toastTimer = null;
+  let isExporting = false;
+  let isPreviewing = false;
 
   const $ = (selector, root = document) => root.querySelector(selector);
   const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
   const formatTime = seconds => `00:${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`;
+
+  function persistState() {
+    const saved = { strokes: state.strokes, boxes: state.boxes, notes: state.notes, puppets: state.puppets, takes: state.takes.map(({ url, ...take }) => take), timeline: state.timeline, scene: state.scene };
+    try { localStorage.setItem('sticky-takes-project-v2', JSON.stringify(saved)); } catch { /* Storage can be unavailable in private browsing. */ }
+  }
+
+  function restoreState() {
+    try {
+      const saved = JSON.parse(localStorage.getItem('sticky-takes-project-v2'));
+      if (!saved) return;
+      ['strokes', 'boxes', 'notes', 'puppets', 'takes', 'timeline'].forEach(key => { if (Array.isArray(saved[key])) state[key] = saved[key]; });
+      if (saved.scene?.elements) state.scene = saved.scene;
+    } catch { /* Start with a fresh project if old data is malformed. */ }
+  }
+
+  function videoStore(mode, id, blob) {
+    return new Promise(resolve => {
+      if (!window.indexedDB) return resolve(null);
+      const request = indexedDB.open('sticky-takes-media', 1);
+      request.onupgradeneeded = () => request.result.createObjectStore('videos');
+      request.onerror = () => resolve(null);
+      request.onsuccess = () => {
+        const tx = request.result.transaction('videos', mode === 'put' ? 'readwrite' : 'readonly');
+        const operation = mode === 'put' ? tx.objectStore('videos').put(blob, id) : tx.objectStore('videos').get(id);
+        operation.onsuccess = () => resolve(operation.result || null);
+        operation.onerror = () => resolve(null);
+      };
+    });
+  }
 
   function flash(message) {
     const toast = $('#toast');
@@ -45,9 +104,9 @@
   function setTool(tool) {
     state.tool = tool;
     $$('.tool').forEach(button => button.classList.toggle('active', button.dataset.tool === tool));
-    $('#modeLabel').textContent = `${tool.toUpperCase()} MODE`;
+    $('#modeLabel').textContent = state.stageMode === 'backdrop' ? 'BACKDROP EDIT MODE' : `${tool.toUpperCase()} MODE`;
     $('#paper').classList.toggle('grab-mode', tool === 'puppet');
-    $('#canvasCallout').textContent = tool === 'puppet' ? 'GRAB + WIGGLE YOUR PUPPETS' : 'DRAW YOUR WORLD HERE';
+    if (state.stageMode !== 'backdrop') $('#canvasCallout').textContent = tool === 'puppet' ? 'GRAB + WIGGLE YOUR PUPPETS' : 'DRAW YOUR WORLD HERE';
   }
 
   function drawPuppet(ctx, puppet, index) {
@@ -65,6 +124,31 @@
     ctx.restore();
   }
 
+  function elementBounds(element, w, h) {
+    return { x: element.x * w, y: element.y * h, w: element.w * w, h: element.h * h };
+  }
+
+  function drawSceneElement(ctx, element, w, h) {
+    const box = elementBounds(element, w, h);
+    ctx.save();
+    ctx.fillStyle = element.color;
+    ctx.strokeStyle = '#171718';
+    ctx.lineWidth = 4;
+    if (element.kind === 'circle') {
+      ctx.beginPath(); ctx.ellipse(box.x + box.w / 2, box.y + box.h / 2, Math.abs(box.w / 2), Math.abs(box.h / 2), 0, 0, Math.PI * 2); ctx.fill(); if (!element.noStroke) ctx.stroke();
+    } else if (element.kind === 'ground') {
+      ctx.beginPath(); ctx.moveTo(box.x, box.y + box.h * .15); ctx.lineTo(box.x + box.w, box.y); ctx.lineTo(box.x + box.w, box.y + box.h); ctx.lineTo(box.x, box.y + box.h); ctx.closePath(); ctx.fill(); if (!element.noStroke) ctx.stroke();
+    } else {
+      ctx.fillRect(box.x, box.y, box.w, box.h); if (!element.noStroke) ctx.strokeRect(box.x, box.y, box.w, box.h);
+      if (element.kind === 'textBox') { ctx.fillStyle = '#171718'; ctx.font = `900 ${Math.max(11, Math.min(24, box.h * .55))}px Arial Black`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(element.text, box.x + box.w / 2, box.y + box.h / 2, Math.max(20, box.w - 8)); }
+    }
+    if (state.stageMode === 'backdrop' && state.selectedElement === element.id) {
+      ctx.strokeStyle = '#ee513d'; ctx.lineWidth = 3; ctx.setLineDash([8, 5]); ctx.strokeRect(box.x - 5, box.y - 5, box.w + 10, box.h + 10);
+      ctx.setLineDash([]); ctx.fillStyle = '#ee513d'; ctx.fillRect(box.x - 8, box.y - 8, 12, 12);
+    }
+    ctx.restore();
+  }
+
   function paint() {
     const rect = canvas.getBoundingClientRect();
     if (!rect.width || !rect.height) return;
@@ -77,13 +161,7 @@
     context.strokeStyle = '#ede8dc'; context.lineWidth = 1;
     for (let x = 0; x < w; x += 24) { context.beginPath(); context.moveTo(x, 0); context.lineTo(x, h); context.stroke(); }
     for (let y = 0; y < h; y += 24) { context.beginPath(); context.moveTo(0, y); context.lineTo(w, y); context.stroke(); }
-    context.fillStyle = '#ffd43b'; context.strokeStyle = '#171718'; context.lineWidth = 4; context.beginPath(); context.arc(w - 70, 62, 30, 0, 7); context.fill(); context.stroke();
-    context.fillStyle = '#f29d77'; context.fillRect(w * .25, h * .39, w * .46, h * .43); context.strokeRect(w * .25, h * .39, w * .46, h * .43);
-    context.fillStyle = '#ffd43b'; context.fillRect(w * .34, h * .45, w * .28, 42); context.strokeRect(w * .34, h * .45, w * .28, 42);
-    context.fillStyle = '#171718'; context.font = '900 24px Arial Black'; context.textAlign = 'center'; context.fillText('MART', w * .48, h * .45 + 30);
-    context.fillStyle = '#78a9df'; context.fillRect(w * .31, h * .64, w * .1, h * .18); context.strokeRect(w * .31, h * .64, w * .1, h * .18);
-    context.fillStyle = '#bde9f4'; context.fillRect(w * .54, h * .66, w * .13, h * .1); context.strokeRect(w * .54, h * .66, w * .13, h * .1);
-    context.fillStyle = '#bbb5a9'; context.beginPath(); context.moveTo(0, h * .84); context.lineTo(w, h * .8); context.lineTo(w, h); context.lineTo(0, h); context.closePath(); context.fill(); context.stroke();
+    state.scene.elements.forEach(element => drawSceneElement(context, element, w, h));
     state.boxes.forEach(box => { context.strokeStyle = box.color; context.lineWidth = 5; context.strokeRect(box.x, box.y, box.w, box.h); });
     state.notes.forEach(note => { context.fillStyle = note.color; context.font = '900 22px Comic Sans MS'; context.textAlign = 'left'; context.fillText(note.text, note.x, note.y); });
     [...state.strokes, activeStroke].filter(Boolean).forEach(stroke => {
@@ -91,7 +169,7 @@
       context.save(); context.globalCompositeOperation = stroke.erase ? 'destination-out' : 'source-over'; context.strokeStyle = stroke.color; context.lineWidth = stroke.width; context.lineCap = 'round'; context.lineJoin = 'round';
       context.beginPath(); context.moveTo(stroke.points[0].x, stroke.points[0].y); stroke.points.slice(1).forEach(point => context.lineTo(point.x, point.y)); context.stroke(); context.restore();
     });
-    state.puppets.forEach((puppet, index) => drawPuppet(context, puppet, index));
+    if (state.stageMode === 'live' || state.isRecording) state.puppets.forEach((puppet, index) => drawPuppet(context, puppet, index));
     if (state.isRecording) { context.fillStyle = '#ee513d'; context.beginPath(); context.arc(24, 26, 9, 0, 7); context.fill(); context.strokeStyle = '#171718'; context.lineWidth = 2; context.stroke(); context.fillStyle = '#171718'; context.font = '900 12px Arial'; context.textAlign = 'left'; context.fillText(`REC  ${formatTime(state.recordTime)}`, 42, 30); }
   }
 
@@ -103,6 +181,19 @@
   canvas.addEventListener('pointerdown', event => {
     const point = canvasPoint(event);
     canvas.setPointerCapture(event.pointerId);
+    if (state.stageMode === 'backdrop') {
+      const rect = canvas.getBoundingClientRect();
+      const hit = [...state.scene.elements].reverse().find(element => {
+        const box = elementBounds(element, rect.width, rect.height);
+        return point.x >= box.x && point.x <= box.x + box.w && point.y >= box.y && point.y <= box.y + box.h;
+      });
+      state.selectedElement = hit?.id || null;
+      draggingElement = hit || null;
+      elementDragOffset = hit ? { x: point.x / rect.width - hit.x, y: point.y / rect.height - hit.y } : null;
+      $('#deletePropButton').classList.toggle('hidden', !hit);
+      paint();
+      return;
+    }
     if (state.tool === 'puppet') { const hit = [...state.puppets].reverse().find(p => Math.hypot(p.x - point.x, p.y - point.y) < 80); if (hit) draggingPuppet = hit.id; return; }
     if (state.tool === 'text') { const text = window.prompt('What should the note say?', 'PLOT TWIST!'); if (text) { state.notes.push({ ...point, text, color: state.ink }); paint(); } return; }
     if (state.tool === 'shape') { shapeStart = point; return; }
@@ -113,6 +204,12 @@
 
   canvas.addEventListener('pointermove', event => {
     const point = canvasPoint(event);
+    if (draggingElement) {
+      const rect = canvas.getBoundingClientRect();
+      draggingElement.x = Math.max(0, Math.min(1 - draggingElement.w, point.x / rect.width - elementDragOffset.x));
+      draggingElement.y = Math.max(0, Math.min(1 - draggingElement.h, point.y / rect.height - elementDragOffset.y));
+      paint(); return;
+    }
     if (draggingPuppet !== null) { const puppet = state.puppets.find(item => item.id === draggingPuppet); if (puppet) Object.assign(puppet, point); paint(); return; }
     if (activeStroke) { activeStroke.points.push(point); paint(); }
   });
@@ -121,7 +218,7 @@
     const point = canvasPoint(event);
     if (activeStroke) { state.strokes.push(activeStroke); activeStroke = null; }
     if (shapeStart) { state.boxes.push({ x: shapeStart.x, y: shapeStart.y, w: point.x - shapeStart.x, h: point.y - shapeStart.y, color: state.ink }); shapeStart = null; }
-    draggingPuppet = null; paint();
+    draggingPuppet = null; draggingElement = null; elementDragOffset = null; persistState(); paint();
   }
   canvas.addEventListener('pointerup', finishPointer);
   canvas.addEventListener('pointercancel', finishPointer);
@@ -130,17 +227,43 @@
     $('#takeCount').textContent = state.takes.length;
     $('#currentTake').textContent = `Take ${String(state.takes.length + 1).padStart(2, '0')}`;
     $('#castList').textContent = state.puppets.length ? state.puppets.map(p => p.name).join(' • ') : 'nobody yet :(';
+    $('#sceneTitle').innerHTML = state.scene.title.replace(/ /, '<br>');
+  }
+
+  function setStageMode(mode) {
+    state.stageMode = mode;
+    if (mode === 'live') { state.selectedElement = null; $('#deletePropButton').classList.add('hidden'); }
+    $$('[data-stage-mode]').forEach(button => { const active = button.dataset.stageMode === mode; button.classList.toggle('active', active); button.setAttribute('aria-selected', String(active)); });
+    $('#paper').classList.toggle('backdrop-mode', mode === 'backdrop');
+    $('#canvasCallout').textContent = mode === 'backdrop' ? 'CLICK + DRAG ANY BACKDROP PROP' : state.tool === 'puppet' ? 'GRAB + WIGGLE YOUR PUPPETS' : 'DRAW YOUR WORLD HERE';
+    $('#modeLabel').textContent = mode === 'backdrop' ? 'BACKDROP EDIT MODE' : `${state.tool.toUpperCase()} MODE`;
+    paint();
+  }
+
+  function applyTemplate(templateId) {
+    const template = sceneTemplates.find(item => item.id === templateId);
+    if (!template) return;
+    state.scene = { templateId: template.id, title: template.name, elements: clone(template.elements) };
+    state.selectedElement = null;
+    $('#templatesModal').classList.add('hidden');
+    setStageMode('backdrop'); updateDesk(); persistState(); flash(`${template.name} is ready to remix!`);
+  }
+
+  function renderTemplates() {
+    $('#templateGrid').innerHTML = sceneTemplates.map(template => `<button class="template-card" data-template="${template.id}"><span class="template-preview" style="--template-color:${template.color}">${template.icon}</span><strong>${template.name}</strong></button>`).join('');
   }
 
   function summonPuppet() {
     const number = state.puppets.length + 1;
     state.puppets.push({ id: Date.now(), x: 160 + number * 45, y: 250 + (number % 2) * 30, color: puppetColors[(number - 1) % puppetColors.length], name: ['BABS', 'DINK', 'CAPTAIN', 'MOP'][number - 1] || `PAL ${number}` });
-    setTool('puppet'); updateDesk(); paint(); flash('A new dramatic talent has arrived!');
+    setStageMode('live'); setTool('puppet'); updateDesk(); persistState(); paint(); flash('A new dramatic talent has arrived!');
   }
 
-  function saveTake(url) {
-    const take = { id: Date.now(), name: `Take ${String(state.takes.length + 1).padStart(2, '0')}`, duration: formatTime(state.recordTime), thumb: canvas.toDataURL('image/png'), url, date: 'just now' };
-    state.takes.unshift(take); updateDesk(); flash(`${take.name} tossed into Takes!`);
+  async function saveTake(blob) {
+    const take = { id: Date.now(), name: `Take ${String(state.takes.length + 1).padStart(2, '0')}`, duration: formatTime(state.recordTime), thumb: canvas.toDataURL('image/png'), url: blob ? URL.createObjectURL(blob) : null, hasVideo: Boolean(blob), date: 'just now' };
+    state.takes.unshift(take);
+    if (blob) await videoStore('put', take.id, blob);
+    persistState(); updateDesk(); renderTakes(); flash(`${take.name} saved to Takes!`);
   }
 
   function startRecording() {
@@ -150,7 +273,7 @@
       const type = MediaRecorder.isTypeSupported('video/webm;codecs=vp9') ? 'video/webm;codecs=vp9' : 'video/webm';
       mediaRecorder = new MediaRecorder(stream, { mimeType: type });
       mediaRecorder.addEventListener('dataavailable', event => { if (event.data.size) mediaChunks.push(event.data); });
-      mediaRecorder.addEventListener('stop', () => saveTake(URL.createObjectURL(new Blob(mediaChunks, { type: 'video/webm' }))));
+      mediaRecorder.addEventListener('stop', () => saveTake(new Blob(mediaChunks, { type: 'video/webm' })));
       mediaRecorder.start();
     } catch { mediaRecorder = null; }
     state.isRecording = true;
@@ -162,7 +285,7 @@
   function stopRecording() {
     state.isRecording = false; clearInterval(recordTimer);
     $('#recordButton').classList.remove('recording'); $('#recordButtonText').textContent = 'RECORD TAKE'; $('#recordStatus').textContent = 'Ready when you are, boss.';
-    if (mediaRecorder && mediaRecorder.state === 'recording') mediaRecorder.stop(); else saveTake();
+    if (mediaRecorder && mediaRecorder.state === 'recording') mediaRecorder.stop(); else saveTake(null);
     mediaRecorder = null; paint();
   }
 
@@ -182,11 +305,25 @@
     $('#takeModal').classList.remove('hidden');
   }
 
+  function downloadTake(take) {
+    if (!take) return;
+    const link = document.createElement('a');
+    link.href = take.url || take.thumb;
+    link.download = `${take.name.replace(/\s+/g, '-').toLowerCase()}.${take.url ? 'webm' : 'png'}`;
+    document.body.append(link); link.click(); link.remove();
+  }
+
+  function saveAllTakes() {
+    if (!state.takes.length) { flash('Record a take first, director!'); return; }
+    state.takes.forEach((take, index) => setTimeout(() => downloadTake(take), index * 180));
+    flash(`Saving ${state.takes.length} take${state.takes.length === 1 ? '' : 's'}!`);
+  }
+
   function sendToTimeline() {
     const take = state.selectedTake;
     if (!take) return;
     if (!state.timeline.some(item => item.takeId === take.id)) state.timeline.push({ id: `take-${take.id}`, kind: 'take', takeId: take.id });
-    $('#takeModal').classList.add('hidden'); flash(`${take.name} sent to the timeline!`); state.selectedTake = null;
+    $('#takeModal').classList.add('hidden'); flash(`${take.name} sent to the timeline!`); state.selectedTake = null; persistState();
   }
 
   function renderTimeline() {
@@ -194,12 +331,164 @@
     const firstTake = first && state.takes.find(take => take.id === first.takeId);
     $('#timelinePreview').innerHTML = first ? `<span class="preview-play">▶</span><strong>${first.kind === 'text' ? first.text : firstTake?.name || 'MISSING TAKE'}</strong>` : '<div class="empty-face small">:|</div><strong>NOTHING TO SCREEN, CHIEF</strong>';
     $('#pieceCount').textContent = `${state.timeline.length} PIECES`;
+    $('#exportVideoButton').disabled = !state.timeline.length || isExporting;
+    $('#playTimelineButton').disabled = !state.timeline.length || isExporting;
     $('#timelineTrack').innerHTML = state.timeline.map((item, index) => {
       const take = state.takes.find(entry => entry.id === item.takeId);
       return item.kind === 'take'
         ? `<div class="clip take" draggable="true" data-index="${index}"><button class="clip-remove" data-remove="${item.id}" aria-label="Remove clip">×</button><div style="background-image:url('${take?.thumb || ''}')"></div><strong>${take?.name || 'Missing take'}</strong><span>${take?.duration || ''}</span></div>`
         : `<div class="clip text" draggable="true" data-index="${index}"><button class="clip-remove" data-remove="${item.id}" aria-label="Remove title card">×</button><b>T</b><strong>${item.text}</strong><span>TITLE CARD</span></div>`;
     }).join('') + '<button class="add-clip" data-go="takes">+<span>ADD CLIP</span></button>';
+  }
+
+  const wait = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
+  const titleCardDuration = 2;
+
+  function secondsFromLabel(label) {
+    const parts = String(label || '').split(':').map(Number);
+    return Math.max(1, (parts.pop() || 0) + (parts.pop() || 0) * 60 + (parts.pop() || 0) * 3600);
+  }
+
+  function timelineItemDuration(item) {
+    if (item.kind === 'text') return titleCardDuration;
+    return secondsFromLabel(state.takes.find(take => take.id === item.takeId)?.duration);
+  }
+
+  function loadVideo(url) {
+    return new Promise((resolve, reject) => {
+      const video = document.createElement('video');
+      video.src = url; video.muted = true; video.playsInline = true; video.preload = 'auto';
+      video.addEventListener('loadeddata', () => resolve(video), { once: true });
+      video.addEventListener('error', () => reject(new Error('A take could not be opened.')), { once: true });
+      video.load();
+    });
+  }
+
+  async function playTimeline() {
+    if (!state.timeline.length || isPreviewing || isExporting) return;
+    isPreviewing = true;
+    const button = $('#playTimelineButton');
+    button.disabled = true; button.textContent = '■ PLAYING FULL CUT…';
+    const preview = $('#timelinePreview');
+    preview.classList.add('playing');
+    try {
+      for (const item of state.timeline) {
+        if (item.kind === 'text') {
+          preview.innerHTML = `<div class="preview-title-card">${item.text}</div>`;
+          await wait(titleCardDuration * 1000);
+          continue;
+        }
+        const take = state.takes.find(entry => entry.id === item.takeId);
+        if (!take) continue;
+        if (take.url) {
+          const video = await loadVideo(take.url);
+          preview.replaceChildren(video);
+          await video.play();
+          await new Promise(resolve => { video.addEventListener('ended', resolve, { once: true }); setTimeout(resolve, timelineItemDuration(item) * 1000 + 500); });
+          video.pause();
+        } else {
+          preview.innerHTML = `<img src="${take.thumb}" alt="${take.name}">`;
+          await wait(timelineItemDuration(item) * 1000);
+        }
+      }
+    } catch { flash('Preview hit a snag. Your timeline is still safe.'); }
+    isPreviewing = false; preview.classList.remove('playing'); renderTimeline();
+    button.textContent = '▶ PLAY FULL CUT'; button.disabled = !state.timeline.length;
+  }
+
+  function drawExportTitle(ctx, canvasWidth, canvasHeight, text) {
+    ctx.fillStyle = '#171718'; ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+    ctx.fillStyle = '#ffd43b'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.font = '900 68px Arial Black, Arial';
+    const words = text.trim().split(/\s+/); const lines = []; let line = '';
+    words.forEach(word => { const candidate = `${line} ${word}`.trim(); if (ctx.measureText(candidate).width > canvasWidth * .78 && line) { lines.push(line); line = word; } else line = candidate; });
+    if (line) lines.push(line);
+    lines.forEach((part, index) => ctx.fillText(part, canvasWidth / 2, canvasHeight / 2 + (index - (lines.length - 1) / 2) * 82));
+    ctx.strokeStyle = '#fffdf4'; ctx.lineWidth = 5; ctx.strokeRect(42, 42, canvasWidth - 84, canvasHeight - 84);
+  }
+
+  function drawContained(ctx, source, canvasWidth, canvasHeight) {
+    ctx.fillStyle = '#171718'; ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+    const sourceWidth = source.videoWidth || source.naturalWidth || canvasWidth;
+    const sourceHeight = source.videoHeight || source.naturalHeight || canvasHeight;
+    const scale = Math.min(canvasWidth / sourceWidth, canvasHeight / sourceHeight);
+    const width = sourceWidth * scale, height = sourceHeight * scale;
+    ctx.drawImage(source, (canvasWidth - width) / 2, (canvasHeight - height) / 2, width, height);
+  }
+
+  function loadImage(url) {
+    return new Promise((resolve, reject) => { const image = new Image(); image.onload = () => resolve(image); image.onerror = reject; image.src = url; });
+  }
+
+  function setExportProgress(percent, message) {
+    const value = Math.max(0, Math.min(100, Math.round(percent)));
+    $('#exportProgress').value = value; $('#exportPercent').textContent = `${value}%`; $('#exportStatusText').textContent = message;
+  }
+
+  async function exportTimeline() {
+    if (!state.timeline.length || isExporting) { if (!state.timeline.length) flash('Add a take or title card to the timeline first!'); return; }
+    if (!window.VideoEncoder || !window.VideoFrame) { flash('MP4 export needs a current Chrome or Edge browser.'); return; }
+    isExporting = true;
+    const button = $('#exportVideoButton');
+    button.disabled = true; button.classList.add('busy'); button.textContent = 'EXPORTING…';
+    $('#playTimelineButton').disabled = true; $('#exportStatus').classList.remove('hidden');
+    setExportProgress(1, 'PREPARING YOUR MOVIE…');
+    try {
+      const { Muxer, ArrayBufferTarget } = await import('./public/mp4-muxer.mjs');
+      const width = 1280, height = 720, fps = 24;
+      const support = await VideoEncoder.isConfigSupported({ codec: 'avc1.42001f', width, height, bitrate: 4_000_000, framerate: fps });
+      if (!support.supported) throw new Error('This browser cannot encode H.264 video.');
+      const exportCanvas = document.createElement('canvas'); exportCanvas.width = width; exportCanvas.height = height;
+      const exportContext = exportCanvas.getContext('2d', { alpha: false });
+      const target = new ArrayBufferTarget();
+      const muxer = new Muxer({ target, video: { codec: 'avc', width, height, frameRate: fps }, fastStart: 'in-memory' });
+      let encoderError = null;
+      const encoder = new VideoEncoder({ output: (chunk, meta) => muxer.addVideoChunk(chunk, meta), error: error => { encoderError = error; } });
+      encoder.configure(support.config);
+      const durations = state.timeline.map(timelineItemDuration);
+      const totalFrames = Math.max(1, Math.ceil(durations.reduce((sum, value) => sum + value, 0) * fps));
+      let encodedFrames = 0;
+      const encodeFrame = () => {
+        if (encoderError) throw encoderError;
+        const frame = new VideoFrame(exportCanvas, { timestamp: Math.round(encodedFrames * 1_000_000 / fps), duration: Math.round(1_000_000 / fps) });
+        encoder.encode(frame, { keyFrame: encodedFrames % (fps * 2) === 0 }); frame.close(); encodedFrames += 1;
+        setExportProgress(4 + encodedFrames / totalFrames * 92, `BUILDING SCENE ${Math.min(state.timeline.length, state.timeline.findIndex((_, index) => encodedFrames <= durations.slice(0, index + 1).reduce((sum, value) => sum + Math.ceil(value * fps), 0)) + 1)} OF ${state.timeline.length}…`);
+      };
+      for (let itemIndex = 0; itemIndex < state.timeline.length; itemIndex += 1) {
+        const item = state.timeline[itemIndex], duration = durations[itemIndex], frameCount = Math.ceil(duration * fps);
+        if (item.kind === 'text') {
+          drawExportTitle(exportContext, width, height, item.text);
+          for (let frameIndex = 0; frameIndex < frameCount; frameIndex += 1) encodeFrame();
+          continue;
+        }
+        const take = state.takes.find(entry => entry.id === item.takeId);
+        if (!take) continue;
+        if (take.url) {
+          const video = await loadVideo(take.url); video.currentTime = 0; await video.play();
+          for (let frameIndex = 0; frameIndex < frameCount; frameIndex += 1) {
+            const targetTime = frameIndex / fps;
+            while (!video.ended && video.currentTime + .012 < targetTime) await wait(8);
+            drawContained(exportContext, video, width, height); encodeFrame();
+          }
+          video.pause();
+        } else {
+          const image = await loadImage(take.thumb); drawContained(exportContext, image, width, height);
+          for (let frameIndex = 0; frameIndex < frameCount; frameIndex += 1) encodeFrame();
+        }
+      }
+      setExportProgress(97, 'FINISHING THE MP4…');
+      await encoder.flush(); encoder.close(); muxer.finalize();
+      if (encoderError) throw encoderError;
+      const blob = new Blob([target.buffer], { type: 'video/mp4' });
+      const url = URL.createObjectURL(blob); const link = document.createElement('a');
+      link.href = url; link.download = `sticky-takes-full-cut-${new Date().toISOString().slice(0, 10)}.mp4`;
+      document.body.append(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      setExportProgress(100, 'DONE! YOUR MOVIE IS DOWNLOADING.'); flash('Full timeline exported as an MP4!');
+    } catch (error) {
+      console.error(error); setExportProgress(0, 'EXPORT COULD NOT FINISH. TRY AGAIN.'); flash(error.message || 'Export could not finish. Try again.');
+    } finally {
+      isExporting = false; button.disabled = !state.timeline.length; button.classList.remove('busy'); button.textContent = '↓ EXPORT VIDEO'; $('#playTimelineButton').disabled = !state.timeline.length;
+    }
   }
 
   function closeModal(id) { $(`#${id}`).classList.add('hidden'); if (id === 'takeModal') state.selectedTake = null; }
@@ -210,24 +499,33 @@
     const tool = event.target.closest('[data-tool]'); if (tool) setTool(tool.dataset.tool);
     const takeTile = event.target.closest('[data-take-id]'); if (takeTile) openTake(state.takes.find(take => take.id === Number(takeTile.dataset.takeId)));
     const close = event.target.closest('[data-close]'); if (close) closeModal(close.dataset.close);
-    const remove = event.target.closest('[data-remove]'); if (remove) { state.timeline = state.timeline.filter(item => item.id !== remove.dataset.remove); renderTimeline(); }
+    const remove = event.target.closest('[data-remove]'); if (remove) { state.timeline = state.timeline.filter(item => item.id !== remove.dataset.remove); persistState(); renderTimeline(); }
+    const stageMode = event.target.closest('[data-stage-mode]'); if (stageMode) setStageMode(stageMode.dataset.stageMode);
+    const template = event.target.closest('[data-template]'); if (template) applyTemplate(template.dataset.template);
   });
 
-  document.addEventListener('keydown', event => { if (event.key === 'Escape') { closeModal('takeModal'); closeModal('helpModal'); } });
+  document.addEventListener('keydown', event => { if (event.key === 'Escape') { closeModal('takeModal'); closeModal('helpModal'); closeModal('templatesModal'); } });
   $$('.modal-backdrop').forEach(modal => modal.addEventListener('click', event => { if (event.target === modal) closeModal(modal.id); }));
   $('#brandButton').addEventListener('click', () => setTab('stage'));
   $('#helpButton').addEventListener('click', () => $('#helpModal').classList.remove('hidden'));
-  $('#undoButton').addEventListener('click', () => { if (state.strokes.length) state.strokes.pop(); else if (state.notes.length) state.notes.pop(); else if (state.boxes.length) state.boxes.pop(); paint(); });
+  $('#undoButton').addEventListener('click', () => { if (state.strokes.length) state.strokes.pop(); else if (state.notes.length) state.notes.pop(); else if (state.boxes.length) state.boxes.pop(); persistState(); paint(); });
+  $('#templatesButton').addEventListener('click', () => $('#templatesModal').classList.remove('hidden'));
+  $('#deletePropButton').addEventListener('click', () => { if (!state.selectedElement) return; state.scene.elements = state.scene.elements.filter(element => element.id !== state.selectedElement); state.selectedElement = null; $('#deletePropButton').classList.add('hidden'); persistState(); paint(); flash('Backdrop prop removed.'); });
   $('#summonButton').addEventListener('click', summonPuppet);
   $('#recordButton').addEventListener('click', () => state.isRecording ? stopRecording() : startRecording());
   $('#sendTimelineButton').addEventListener('click', sendToTimeline);
-  $('#addTitleButton').addEventListener('click', () => { const text = window.prompt('Title card text', 'MEANWHILE...'); if (text) { state.timeline.push({ id: `text-${Date.now()}`, kind: 'text', text }); renderTimeline(); } });
+  $('#saveTakeButton').addEventListener('click', () => downloadTake(state.selectedTake));
+  $('#saveAllTakesButton').addEventListener('click', saveAllTakes);
+  $('#addTitleButton').addEventListener('click', () => { const text = window.prompt('Title card text', 'MEANWHILE...'); if (text) { state.timeline.push({ id: `text-${Date.now()}`, kind: 'text', text }); persistState(); renderTimeline(); } });
+  $('#playTimelineButton').addEventListener('click', playTimeline);
+  $('#exportVideoButton').addEventListener('click', exportTimeline);
   $('#timelineTrack').addEventListener('dragstart', event => { const clip = event.target.closest('[data-index]'); if (clip) draggedClip = Number(clip.dataset.index); });
   $('#timelineTrack').addEventListener('dragover', event => event.preventDefault());
-  $('#timelineTrack').addEventListener('drop', event => { const clip = event.target.closest('[data-index]'); if (!clip || draggedClip === null) return; const [item] = state.timeline.splice(draggedClip, 1); state.timeline.splice(Number(clip.dataset.index), 0, item); draggedClip = null; renderTimeline(); });
+  $('#timelineTrack').addEventListener('drop', event => { const clip = event.target.closest('[data-index]'); if (!clip || draggedClip === null) return; const [item] = state.timeline.splice(draggedClip, 1); state.timeline.splice(Number(clip.dataset.index), 0, item); draggedClip = null; persistState(); renderTimeline(); });
 
   const swatches = $('#swatches');
   inkColors.forEach((color, index) => { const button = document.createElement('button'); button.className = `swatch${index === 0 ? ' chosen' : ''}`; button.style.background = color; button.setAttribute('aria-label', `Color ${index + 1}`); button.addEventListener('click', () => { state.ink = color; $$('.swatch').forEach(item => item.classList.toggle('chosen', item === button)); }); swatches.append(button); });
   window.addEventListener('resize', paint);
-  updateDesk(); renderTakes(); renderTimeline(); requestAnimationFrame(paint);
+  restoreState(); renderTemplates(); updateDesk(); renderTakes(); renderTimeline(); requestAnimationFrame(paint);
+  Promise.all(state.takes.filter(take => take.hasVideo).map(async take => { const blob = await videoStore('get', take.id); if (blob) take.url = URL.createObjectURL(blob); })).then(() => { if (state.tab === 'takes') renderTakes(); });
 })();

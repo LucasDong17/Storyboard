@@ -29,7 +29,7 @@
 
     <section class="studio" id="stageView">
       <aside class="tool-rail" aria-label="Drawing tools">
-        <div class="scene-label"><span>SCENE 01</span><strong>The Great<br>Snack Heist</strong></div>
+        <div class="scene-label"><span>SCENE 01</span><strong id="sceneTitle">The Great<br>Snack Heist</strong></div>
         <div class="tool-stack">
           <button class="tool active" data-tool="pencil"><span>✎</span>PENCIL</button>
           <button class="tool" data-tool="eraser"><span>▱</span>ERASER</button>
@@ -38,11 +38,13 @@
           <button class="tool" data-tool="puppet"><span>♙</span>PUPPET</button>
         </div>
         <div class="color-box"><span>INK COLOR</span><div class="swatches" id="swatches"></div></div>
+        <button class="scene-button" id="templatesButton">▦ SCENE TEMPLATES</button>
+        <button class="scene-button hidden" id="deletePropButton">× DELETE PROP</button>
         <button class="undo-button" id="undoButton">↶ UNDO</button>
       </aside>
 
       <section class="canvas-wrap">
-        <div class="paper-tabs" aria-hidden="true"><span>BACKDROP</span><span>LIVE STAGE</span></div>
+        <div class="paper-tabs" role="tablist" aria-label="Stage layer"><button id="backdropTab" role="tab" aria-selected="false" data-stage-mode="backdrop">BACKDROP</button><button class="active" id="liveTab" role="tab" aria-selected="true" data-stage-mode="live">LIVE STAGE</button></div>
         <div class="paper" id="paper"><canvas id="stageCanvas" aria-label="Draw your scene and move puppets here"></canvas><div class="canvas-callout" id="canvasCallout">DRAW YOUR WORLD HERE</div></div>
         <div class="paper-footer"><span>720p-ish</span><span id="modeLabel">PENCIL MODE</span><span id="timeLabel">00:00:00</span></div>
       </section>
@@ -58,20 +60,21 @@
     </section>
 
     <section class="library-view hidden" id="takesView">
-      <div class="view-heading"><div><span class="kicker">THE INVENTORY</span><h2>YOUR BEAUTIFUL MESSES</h2><p>Every take lives here. Even the weird ones.</p></div><button class="chunky yellow" data-go="stage">+ SHOOT ANOTHER</button></div>
+      <div class="view-heading"><div><span class="kicker">THE INVENTORY</span><h2>YOUR BEAUTIFUL MESSES</h2><p>Every take lives here. Even the weird ones.</p></div><div class="heading-actions"><button class="chunky cream" id="saveAllTakesButton">↓ SAVE ALL TAKES</button><button class="chunky yellow" data-go="stage">+ SHOOT ANOTHER</button></div></div>
       <div id="takesContent"></div>
     </section>
 
     <section class="timeline-view hidden" id="timelineView">
-      <div class="view-heading"><div><span class="kicker">THE CUTTING TABLE</span><h2>SMUSH IT TOGETHER</h2><p>Drag scenes around. Add words. Become cinema.</p></div><div class="heading-actions"><button class="chunky cream" id="addTitleButton">+ TEXT CARD</button><button class="chunky yellow" data-go="takes">+ ADD TAKES</button></div></div>
+      <div class="view-heading"><div><span class="kicker">THE CUTTING TABLE</span><h2>SMUSH IT TOGETHER</h2><p>Drag scenes around. Add words. Become cinema.</p></div><div class="heading-actions"><button class="chunky cream" id="addTitleButton">+ TEXT CARD</button><button class="chunky cream" data-go="takes">+ ADD TAKES</button><button class="chunky yellow export-button" id="exportVideoButton">↓ EXPORT VIDEO</button></div></div>
       <div class="timeline-workspace">
-        <div class="preview-monitor"><div class="preview-inner" id="timelinePreview"></div><div class="monitor-label"><span>ROUGH CUT PREVIEW</span><span id="pieceCount">0 PIECES</span></div></div>
+        <div class="preview-column"><div class="preview-monitor"><div class="preview-inner" id="timelinePreview"></div><div class="monitor-label"><span>FULL CUT PREVIEW</span><span id="pieceCount">0 PIECES</span></div></div><button class="preview-button" id="playTimelineButton">▶ PLAY FULL CUT</button><div class="export-status hidden" id="exportStatus" role="status" aria-live="polite"><div><strong id="exportStatusText">PREPARING YOUR MOVIE…</strong><span id="exportPercent">0%</span></div><progress id="exportProgress" max="100" value="0"></progress><small>Keep this tab open. Everything stays on your device.</small></div></div>
         <div class="track-area"><div class="track-label">VIDEO + WORDS</div><div class="track" id="timelineTrack"></div><div class="ruler"><span>0s</span><span>5s</span><span>10s</span><span>15s</span><span>20s</span><span>25s</span><span>30s</span><span>35s</span></div></div>
       </div>
     </section>
   </main>
 
-  <div class="modal-backdrop hidden" id="takeModal" role="dialog" aria-modal="true" aria-labelledby="takeModalTitle"><section class="take-modal"><button class="modal-close" data-close="takeModal" aria-label="Close">×</button><span class="kicker">NOW SCREENING</span><h2 id="takeModalTitle"></h2><div id="takeMedia"></div><div class="modal-actions"><button class="chunky cream" data-close="takeModal">BACK TO SHELF</button><button class="chunky yellow" id="sendTimelineButton">SEND TO TIMELINE →</button></div></section></div>
+  <div class="modal-backdrop hidden" id="takeModal" role="dialog" aria-modal="true" aria-labelledby="takeModalTitle"><section class="take-modal"><button class="modal-close" data-close="takeModal" aria-label="Close">×</button><span class="kicker">NOW SCREENING</span><h2 id="takeModalTitle"></h2><div id="takeMedia"></div><div class="modal-actions"><button class="chunky cream" data-close="takeModal">BACK TO SHELF</button><button class="chunky cream" id="saveTakeButton">↓ SAVE TAKE</button><button class="chunky yellow" id="sendTimelineButton">SEND TO TIMELINE →</button></div></section></div>
+  <div class="modal-backdrop hidden" id="templatesModal" role="dialog" aria-modal="true" aria-labelledby="templatesTitle"><section class="template-modal"><button class="modal-close" data-close="templatesModal" aria-label="Close">×</button><span class="kicker">START SOMEWHERE FUN</span><h2 id="templatesTitle">SCENE TEMPLATES</h2><p>Pick a scene, then open Backdrop and drag any prop around.</p><div class="template-grid" id="templateGrid"></div></section></div>
   <div class="modal-backdrop hidden" id="helpModal" role="dialog" aria-modal="true" aria-labelledby="helpTitle"><section class="help-modal"><button class="modal-close" data-close="helpModal" aria-label="Close">×</button><span class="kicker">TINY MANUAL</span><h2 id="helpTitle">HOW TO MAKE A MESS</h2><ol><li>Draw a backdrop with the tools on the left.</li><li>Summon a puppet (or three).</li><li>Record, then drag the puppets around the stage.</li><li>Find your take in Takes and send it to the Timeline.</li><li>Reorder the clips until it feels like cinema.</li></ol></section></div>
   <div class="toast hidden" id="toast" role="status"></div>
   <script src="script.js"></script>
