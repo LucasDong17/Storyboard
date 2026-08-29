@@ -3,8 +3,8 @@
 
   const inkColors = ['#171718', '#ee513d', '#5c8ee6', '#ffd43b'];
   const puppetColors = ['#ee513d', '#5c8ee6', '#ffd43b', '#66c79a'];
-  const sceneTemplates = [
-    { id: 'mart', name: 'The Great Snack Heist', icon: '🏪', color: '#f29d77', elements: [
+  const builtInTemplates = [
+    { id: 'mart', name: 'The Great Snack Heist', icon: '🏪', color: '#f29d77', background: '#fffdf4', elements: [
       { id: 'sun', kind: 'circle', x: .90, y: .12, w: .09, h: .12, color: '#ffd43b' },
       { id: 'mart', kind: 'rect', x: .25, y: .39, w: .46, h: .43, color: '#f29d77' },
       { id: 'sign', kind: 'textBox', x: .34, y: .45, w: .28, h: .09, color: '#ffd43b', text: 'MART' },
@@ -12,13 +12,13 @@
       { id: 'window', kind: 'rect', x: .54, y: .66, w: .13, h: .10, color: '#bde9f4' },
       { id: 'road', kind: 'ground', x: 0, y: .82, w: 1, h: .18, color: '#bbb5a9' }
     ]},
-    { id: 'space', name: 'Trouble in Space', icon: '🚀', color: '#252650', elements: [
+    { id: 'space', name: 'Trouble in Space', icon: '🚀', color: '#252650', background: '#252650', elements: [
       { id: 'sky', kind: 'rect', x: 0, y: 0, w: 1, h: 1, color: '#252650', noStroke: true },
       { id: 'moon', kind: 'circle', x: .78, y: .23, w: .20, h: .27, color: '#ddd9c9' },
       { id: 'rocket', kind: 'textBox', x: .20, y: .42, w: .24, h: .16, color: '#ee513d', text: 'ROCKET' },
       { id: 'planet', kind: 'circle', x: .50, y: .70, w: .24, h: .30, color: '#5c8ee6' }
     ]},
-    { id: 'forest', name: 'The Very Weird Woods', icon: '🌲', color: '#66c79a', elements: [
+    { id: 'forest', name: 'The Very Weird Woods', icon: '🌲', color: '#66c79a', background: '#d9eff2', elements: [
       { id: 'sky', kind: 'rect', x: 0, y: 0, w: 1, h: 1, color: '#d9eff2', noStroke: true },
       { id: 'sun', kind: 'circle', x: .82, y: .14, w: .12, h: .16, color: '#ffd43b' },
       { id: 'tree1', kind: 'textBox', x: .10, y: .30, w: .18, h: .48, color: '#66c79a', text: 'TREE' },
@@ -27,7 +27,8 @@
     ]}
   ];
   const clone = value => JSON.parse(JSON.stringify(value));
-  const defaultScene = () => ({ templateId: 'mart', title: 'The Great Snack Heist', elements: clone(sceneTemplates[0].elements) });
+  let sceneTemplates = clone(builtInTemplates);
+  const defaultScene = () => ({ templateId: 'mart', title: 'The Great Snack Heist', background: '#fffdf4', elements: clone(sceneTemplates[0].elements) });
   const state = {
     tab: 'stage', tool: 'pencil', ink: inkColors[0], strokes: [], boxes: [], notes: [], puppets: [],
     isRecording: false, recordTime: 0, takes: [], timeline: [], selectedTake: null,
@@ -54,7 +55,7 @@
   const formatTime = seconds => `00:${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`;
 
   function persistState() {
-    const saved = { strokes: state.strokes, boxes: state.boxes, notes: state.notes, puppets: state.puppets, takes: state.takes.map(({ url, ...take }) => take), timeline: state.timeline, scene: state.scene };
+    const saved = { strokes: state.strokes, boxes: state.boxes, notes: state.notes, puppets: state.puppets, takes: state.takes.map(({ url, ...take }) => take), timeline: state.timeline, scene: state.scene, templates: sceneTemplates };
     try { localStorage.setItem('sticky-takes-project-v2', JSON.stringify(saved)); } catch { /* Storage can be unavailable in private browsing. */ }
   }
 
@@ -63,7 +64,8 @@
       const saved = JSON.parse(localStorage.getItem('sticky-takes-project-v2'));
       if (!saved) return;
       ['strokes', 'boxes', 'notes', 'puppets', 'takes', 'timeline'].forEach(key => { if (Array.isArray(saved[key])) state[key] = saved[key]; });
-      if (saved.scene?.elements) state.scene = saved.scene;
+      if (Array.isArray(saved.templates) && saved.templates.length) sceneTemplates = saved.templates;
+      if (saved.scene?.elements) state.scene = { background: '#fffdf4', ...saved.scene };
     } catch { /* Start with a fresh project if old data is malformed. */ }
   }
 
@@ -157,8 +159,8 @@
     if (canvas.width !== width || canvas.height !== height) { canvas.width = width; canvas.height = height; }
     context.setTransform(dpr, 0, 0, dpr, 0, 0);
     const w = rect.width, h = rect.height;
-    context.fillStyle = '#fffdf4'; context.fillRect(0, 0, w, h);
-    context.strokeStyle = '#ede8dc'; context.lineWidth = 1;
+    context.fillStyle = state.scene.background || '#fffdf4'; context.fillRect(0, 0, w, h);
+    context.strokeStyle = state.stageMode === 'backdrop' ? 'rgba(23,23,24,.09)' : '#ede8dc'; context.lineWidth = 1;
     for (let x = 0; x < w; x += 24) { context.beginPath(); context.moveTo(x, 0); context.lineTo(x, h); context.stroke(); }
     for (let y = 0; y < h; y += 24) { context.beginPath(); context.moveTo(0, y); context.lineTo(w, y); context.stroke(); }
     state.scene.elements.forEach(element => drawSceneElement(context, element, w, h));
@@ -191,6 +193,7 @@
       draggingElement = hit || null;
       elementDragOffset = hit ? { x: point.x / rect.width - hit.x, y: point.y / rect.height - hit.y } : null;
       $('#deletePropButton').classList.toggle('hidden', !hit);
+      syncBackdropEditor();
       paint();
       return;
     }
@@ -227,7 +230,7 @@
     $('#takeCount').textContent = state.takes.length;
     $('#currentTake').textContent = `Take ${String(state.takes.length + 1).padStart(2, '0')}`;
     $('#castList').textContent = state.puppets.length ? state.puppets.map(p => p.name).join(' • ') : 'nobody yet :(';
-    $('#sceneTitle').innerHTML = state.scene.title.replace(/ /, '<br>');
+    $('#sceneTitle').innerHTML = escapeText(state.scene.title).replace(/ /, '<br>');
   }
 
   function setStageMode(mode) {
@@ -243,14 +246,72 @@
   function applyTemplate(templateId) {
     const template = sceneTemplates.find(item => item.id === templateId);
     if (!template) return;
-    state.scene = { templateId: template.id, title: template.name, elements: clone(template.elements) };
+    state.scene = { templateId: template.id, title: template.name, background: template.background || '#fffdf4', elements: clone(template.elements) };
     state.selectedElement = null;
     $('#templatesModal').classList.add('hidden');
     setStageMode('backdrop'); updateDesk(); persistState(); flash(`${template.name} is ready to remix!`);
   }
 
   function renderTemplates() {
-    $('#templateGrid').innerHTML = sceneTemplates.map(template => `<button class="template-card" data-template="${template.id}"><span class="template-preview" style="--template-color:${template.color}">${template.icon}</span><strong>${template.name}</strong></button>`).join('');
+    $('#templateGrid').innerHTML = sceneTemplates.map(template => `<article class="template-card"><span class="template-preview" style="--template-color:${template.color || template.background || '#5c8ee6'}">${template.icon || '✦'}</span><strong>${escapeText(template.name)}</strong><div><button data-template="${template.id}">USE</button><button data-edit-template="${template.id}">EDIT</button></div></article>`).join('');
+  }
+
+  function escapeText(value) {
+    const node = document.createElement('span'); node.textContent = String(value || ''); return node.innerHTML;
+  }
+
+  function makeBlankBackdrop() {
+    state.scene = { templateId: `custom-${Date.now()}`, title: 'My Backdrop', background: '#fffdf4', elements: [] };
+    state.selectedElement = null; setStageMode('backdrop'); updateDesk(); persistState(); openBackdropEditor();
+  }
+
+  function addBackdropProp() {
+    const count = state.scene.elements.length;
+    const element = { id: `prop-${Date.now()}`, kind: 'rect', x: .18 + (count % 4) * .08, y: .22 + (count % 3) * .08, w: .24, h: .20, color: inkColors[(count + 1) % inkColors.length] };
+    state.scene.elements.push(element); state.selectedElement = element.id; $('#deletePropButton').classList.remove('hidden'); syncBackdropEditor(); persistState(); paint();
+  }
+
+  function selectedBackdropElement() { return state.scene.elements.find(element => element.id === state.selectedElement) || null; }
+
+  function syncBackdropEditor() {
+    const element = selectedBackdropElement();
+    const editorOpen = !$('#backdropEditorModal')?.classList.contains('hidden');
+    if (!editorOpen) return;
+    $('#propEmpty').classList.toggle('hidden', Boolean(element)); $('#propControls').classList.toggle('hidden', !element); $('#deleteEditorPropButton').disabled = !element;
+    if (!element) return;
+    $('#propKindInput').value = element.kind; $('#propColorInput').value = element.color || '#171718'; $('#propTextInput').value = element.text || 'LABEL';
+    $('#propWidthInput').value = Math.round(element.w * 100); $('#propHeightInput').value = Math.round(element.h * 100); $('#propTextField').classList.toggle('hidden', element.kind !== 'textBox');
+  }
+
+  function openBackdropEditor() {
+    setStageMode('backdrop'); $('#backdropNameInput').value = state.scene.title; $('#backdropColorInput').value = state.scene.background || '#fffdf4';
+    $('#backdropEditorModal').classList.remove('hidden'); syncBackdropEditor();
+  }
+
+  function updateSelectedProp() {
+    const element = selectedBackdropElement(); if (!element) return;
+    element.kind = $('#propKindInput').value; element.color = $('#propColorInput').value; element.text = $('#propTextInput').value || 'LABEL';
+    element.w = Number($('#propWidthInput').value) / 100; element.h = Number($('#propHeightInput').value) / 100;
+    element.x = Math.min(element.x, 1 - element.w); element.y = Math.min(element.y, 1 - element.h);
+    $('#propTextField').classList.toggle('hidden', element.kind !== 'textBox'); persistState(); paint();
+  }
+
+  function deleteSelectedProp() {
+    if (!state.selectedElement) return;
+    state.scene.elements = state.scene.elements.filter(element => element.id !== state.selectedElement); state.selectedElement = null;
+    $('#deletePropButton').classList.add('hidden'); syncBackdropEditor(); persistState(); paint(); flash('Backdrop prop removed.');
+  }
+
+  function saveCurrentTemplate(asNew = false) {
+    const name = $('#backdropNameInput').value.trim() || 'My Backdrop'; state.scene.title = name; updateDesk();
+    let template = !asNew && sceneTemplates.find(item => item.id === state.scene.templateId);
+    if (!template) {
+      const id = `custom-${Date.now()}`; template = { id, icon: '✦' }; sceneTemplates.push(template); state.scene.templateId = id;
+    } else if (asNew) {
+      const id = `custom-${Date.now()}`; template = { id, icon: '✦' }; sceneTemplates.push(template); state.scene.templateId = id;
+    }
+    Object.assign(template, { name, background: state.scene.background, color: state.scene.background, elements: clone(state.scene.elements) });
+    renderTemplates(); persistState(); flash(asNew ? 'Saved as a new template!' : 'Template changes saved!');
   }
 
   function summonPuppet() {
@@ -502,15 +563,25 @@
     const remove = event.target.closest('[data-remove]'); if (remove) { state.timeline = state.timeline.filter(item => item.id !== remove.dataset.remove); persistState(); renderTimeline(); }
     const stageMode = event.target.closest('[data-stage-mode]'); if (stageMode) setStageMode(stageMode.dataset.stageMode);
     const template = event.target.closest('[data-template]'); if (template) applyTemplate(template.dataset.template);
+    const editTemplate = event.target.closest('[data-edit-template]'); if (editTemplate) { applyTemplate(editTemplate.dataset.editTemplate); openBackdropEditor(); }
   });
 
-  document.addEventListener('keydown', event => { if (event.key === 'Escape') { closeModal('takeModal'); closeModal('helpModal'); closeModal('templatesModal'); } });
+  document.addEventListener('keydown', event => { if (event.key === 'Escape') { closeModal('takeModal'); closeModal('helpModal'); closeModal('templatesModal'); closeModal('backdropEditorModal'); } if ((event.key === 'Delete' || event.key === 'Backspace') && state.stageMode === 'backdrop' && state.selectedElement && !event.target.closest('input, textarea, select, button')) deleteSelectedProp(); });
   $$('.modal-backdrop').forEach(modal => modal.addEventListener('click', event => { if (event.target === modal) closeModal(modal.id); }));
   $('#brandButton').addEventListener('click', () => setTab('stage'));
   $('#helpButton').addEventListener('click', () => $('#helpModal').classList.remove('hidden'));
   $('#undoButton').addEventListener('click', () => { if (state.strokes.length) state.strokes.pop(); else if (state.notes.length) state.notes.pop(); else if (state.boxes.length) state.boxes.pop(); persistState(); paint(); });
   $('#templatesButton').addEventListener('click', () => $('#templatesModal').classList.remove('hidden'));
-  $('#deletePropButton').addEventListener('click', () => { if (!state.selectedElement) return; state.scene.elements = state.scene.elements.filter(element => element.id !== state.selectedElement); state.selectedElement = null; $('#deletePropButton').classList.add('hidden'); persistState(); paint(); flash('Backdrop prop removed.'); });
+  $('#newBackdropButton').addEventListener('click', makeBlankBackdrop);
+  $('#editBackdropButton').addEventListener('click', openBackdropEditor);
+  $('#deletePropButton').addEventListener('click', deleteSelectedProp);
+  $('#addBackdropPropButton').addEventListener('click', addBackdropProp);
+  $('#deleteEditorPropButton').addEventListener('click', deleteSelectedProp);
+  $('#backdropNameInput').addEventListener('input', event => { state.scene.title = event.target.value || 'My Backdrop'; updateDesk(); persistState(); });
+  $('#backdropColorInput').addEventListener('input', event => { state.scene.background = event.target.value; persistState(); paint(); });
+  ['propKindInput', 'propColorInput', 'propTextInput', 'propWidthInput', 'propHeightInput'].forEach(id => $(`#${id}`).addEventListener('input', updateSelectedProp));
+  $('#saveTemplateChangesButton').addEventListener('click', () => saveCurrentTemplate(false));
+  $('#saveAsTemplateButton').addEventListener('click', () => saveCurrentTemplate(true));
   $('#summonButton').addEventListener('click', summonPuppet);
   $('#recordButton').addEventListener('click', () => state.isRecording ? stopRecording() : startRecording());
   $('#sendTimelineButton').addEventListener('click', sendToTimeline);
